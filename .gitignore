@@ -1,0 +1,6 @@
+.claude
+bin/
+lib/
+lib64
+*.pyc
+*.pyo

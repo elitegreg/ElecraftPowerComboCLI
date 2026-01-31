@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "epcc"
+version = "0.1.0"
+description = "Elecraft Power Combo CLI - Control interface for KPA500 and KAT500"
+requires-python = ">=3.12"
+dependencies = [
+    "textual>=0.40.0",
+    "pyserial-asyncio-fast>=0.14",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
