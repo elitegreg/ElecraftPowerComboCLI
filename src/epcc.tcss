@@ -4,15 +4,16 @@ Screen {
     layout: vertical;
 }
 
-/* KPA500 Amplifier Section */
-#amplifier {
+/* Main container */
+#main {
     border: solid white;
     height: auto;
     margin: 1;
     padding: 0;
 }
 
-#amp-title {
+/* Title */
+#title {
     text-align: center;
     content-align: center middle;
     text-style: bold;
@@ -23,7 +24,8 @@ Screen {
     border-bottom: solid white;
 }
 
-#amp-content {
+/* Main content area */
+#content {
     height: auto;
     width: 100%;
 }
@@ -32,7 +34,7 @@ Screen {
 #readings {
     background: #222222;
     color: #666666;
-    width: 16;
+    width: 20;
     height: auto;
     padding: 1;
     border-right: solid white;
@@ -43,11 +45,6 @@ Screen {
     color: black;
 }
 
-.reading-label {
-    color: black;
-    height: 1;
-}
-
 /* Right panel - Controls */
 #controls {
     background: #333333;
@@ -56,22 +53,26 @@ Screen {
     padding: 1;
 }
 
-#control-row {
+/* Mode and antenna selector section */
+#mode-antenna-section {
     height: auto;
     width: 100%;
-    align: left middle;
 }
 
-#power-toggle {
-    width: auto;
+/* Section labels */
+#kpa-mode-label, #kat-mode-label, #antenna-label {
     height: 1;
-    margin-right: 2;
+    color: #aaaaaa;
+    margin-top: 1;
+}
+
+#kpa-mode-label {
+    margin-top: 0;
 }
 
 #mode-select {
     width: auto;
     height: auto;
-    margin-right: 2;
 }
 
 #mode-select RadioButton {
@@ -79,81 +80,14 @@ Screen {
     margin-right: 1;
 }
 
-#fault {
-    width: auto;
-    height: 1;
-    margin-left: 2;
-}
-
-/* Bar graphs */
-#power-bar {
-    margin-top: 1;
-    height: 1;
-    width: 100%;
-}
-
-#swr-bar {
-    margin-top: 1;
-    height: 1;
-    width: 100%;
-}
-
-/* KAT500 Tuner Section */
-#tuner {
-    border: solid white;
-    height: auto;
-    margin: 1;
-    padding: 0;
-}
-
-#tuner-title {
-    text-align: center;
-    content-align: center middle;
-    text-style: bold;
-    color: white;
-    background: #333333;
-    width: 100%;
-    height: 3;
-    border-bottom: solid white;
-}
-
-#tuner-content {
-    background: #333333;
-    height: auto;
-    padding: 1;
-}
-
-#tuner-row1 {
-    height: auto;
-    width: 100%;
-    align: left middle;
-}
-
-#tuner-row2 {
-    height: auto;
-    width: 100%;
-    margin-top: 1;
-}
-
-#tuner-mode {
+#kat-mode-select {
     width: auto;
     height: auto;
-    margin-right: 2;
 }
 
-#tuner-mode RadioButton {
+#kat-mode-select RadioButton {
     width: auto;
     margin-right: 1;
-}
-
-#tune-btn {
-    margin-right: 2;
-}
-
-#tuner-swr {
-    color: white;
-    width: auto;
-    height: 1;
 }
 
 #antenna-select {
@@ -164,6 +98,116 @@ Screen {
 #antenna-select RadioButton {
     width: auto;
     margin-right: 1;
+}
+
+/* Bar graphs */
+#power-bar {
+    margin-top: 1;
+    height: 1;
+    width: 100%;
+    color: white;
+}
+
+#kpa-swr-bar {
+    margin-top: 1;
+    height: 1;
+    width: 100%;
+    color: white;
+}
+
+#kat-swr-bar {
+    margin-top: 1;
+    height: 1;
+    width: 100%;
+    color: white;
+}
+
+/* Button row below meters */
+#button-row {
+    height: auto;
+    width: 100%;
+    margin-top: 2;
+    align: left middle;
+}
+
+/* Power toggle button */
+#power-toggle {
+    width: 12;
+    height: 3;
+    content-align: center middle;
+    text-align: center;
+    margin-right: 2;
+    background: #003300;
+    color: #666666;
+    text-style: bold;
+}
+
+#power-toggle.power-on {
+    background: #00aa00;
+    color: white;
+}
+
+/* Tune button */
+#tune-btn {
+    width: 12;
+    height: 3;
+    content-align: center middle;
+    text-align: center;
+    margin-right: 2;
+    background: black;
+    color: white;
+    text-style: bold;
+}
+
+#tune-btn.tuning {
+    background: white;
+    color: black;
+}
+
+/* Fault section */
+#faults {
+    width: 100%;
+    height: auto;
+    padding: 1;
+    border-top: solid white;
+}
+
+#faults-row {
+    height: auto;
+    width: 100%;
+    align: left middle;
+}
+
+/* Fault button - to the left of fault text */
+#fault-btn {
+    width: 9;
+    height: 3;
+    content-align: center middle;
+    text-align: center;
+    margin-right: 2;
+    background: #440000;
+    color: #880000;
+    text-style: bold;
+}
+
+#fault-btn.fault-active {
+    background: #ff0000;
+    color: white;
+}
+
+#fault-texts {
+    width: 1fr;
+    height: auto;
+}
+
+#kpa-fault {
+    height: 1;
+    width: 100%;
+}
+
+#kat-fault {
+    height: 1;
+    width: 100%;
 }
 
 /* RadioSet styling */
@@ -177,7 +221,7 @@ RadioSet {
 
 RadioButton {
     background: #333333;
-    color: white;
+    color: #004400;
     height: auto;
     padding: 0 1;
 }
@@ -186,9 +230,12 @@ RadioButton:focus {
     text-style: bold;
 }
 
-/* Button styling */
-Button {
-    min-width: 8;
+RadioButton.-on {
+    color: #00ff00;
+}
+
+RadioButton > .toggle--label {
+    color: white;
 }
 
 /* Help footer */
@@ -199,3 +246,9 @@ Button {
     width: 100%;
     margin-top: 1;
 }
+
+/* ==========================================================================
+   Note: Bar graph segment colors and fault text colors are defined as
+   Rich text styles in epcc.py at the top of the file (BAR_SEGMENT_* and
+   FAULT_*_COLOR constants) for easy theming.
+   ========================================================================== */

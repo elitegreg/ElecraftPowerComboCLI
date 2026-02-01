@@ -6,24 +6,41 @@ Control interface for KPA500 amplifier and KAT500 antenna tuner.
 """
 
 import argparse
-import asyncio
 from typing import Optional
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
-from textual.widgets import Static, Button, RadioButton, RadioSet
+from textual.widgets import Static, RadioButton, RadioSet
 from textual.message import Message
 from rich.text import Text
-from rich.style import Style
 
-from model import KPA500Model, KPA500State
-from kpa500 import Band, Fault, OperatingMode
+from model import ComboModel, ComboState
+from kpa500 import OperatingMode
+from kpa500 import Fault as KPAFault
+from kat500 import Antenna, Mode as KATMode
+from kat500 import Fault as KATFault
+
+
+# =============================================================================
+# Theme Colors (Rich text styles) - Edit these to change the color scheme
+# =============================================================================
+# Bar graph segment colors (green/yellow/red for low/medium/high)
+BAR_SEGMENT_1_LIT = "#00ff00"   # Green lit
+BAR_SEGMENT_1_DARK = "#004400"  # Green dark
+BAR_SEGMENT_2_LIT = "#ffff00"   # Yellow lit
+BAR_SEGMENT_2_DARK = "#444400"  # Yellow dark
+BAR_SEGMENT_3_LIT = "#ff0000"   # Red lit
+BAR_SEGMENT_3_DARK = "#440000"  # Red dark
+
+# Fault text colors
+FAULT_NONE_COLOR = "green"
+FAULT_ERROR_COLOR = "bold red"
 
 
 class StateUpdated(Message):
-    """Message posted when KPA500 state changes."""
-    def __init__(self, state: KPA500State) -> None:
+    """Message posted when state changes."""
+    def __init__(self, state: ComboState) -> None:
         self.state = state
         super().__init__()
 
@@ -37,7 +54,7 @@ class SegmentedBarGraph(Static):
         self,
         min_value: float,
         max_value: float,
-        segments: list[tuple[float, str, str]],
+        num_segments: int = 3,
         width: int = 30,
         label: str = "",
         clamp_display: bool = False,
@@ -47,7 +64,7 @@ class SegmentedBarGraph(Static):
         super().__init__(**kwargs)
         self.min_value = min_value
         self.max_value = max_value
-        self.segments = segments
+        self.num_segments = num_segments
         self.bar_width = width
         self.label = label
         self.clamp_display = clamp_display
@@ -56,57 +73,54 @@ class SegmentedBarGraph(Static):
     def render(self) -> Text:
         text = Text()
         if self.label:
-            text.append(f"{self.label}: ", style="bold white")
+            text.append(f"{self.label} ")
 
         # Clamp value for bar display but keep actual for text
         display_value = min(self.value, self.max_value) if self.clamp_display else self.value
 
+        # Calculate segment boundaries (evenly divided)
         total_range = self.max_value - self.min_value
-        current_pos = 0
+        segment_size = total_range / self.num_segments
+        chars_per_segment = self.bar_width // self.num_segments
 
-        for i, (threshold, dark_color, lit_color) in enumerate(self.segments):
-            prev_threshold = self.segments[i - 1][0] if i > 0 else self.min_value
-            segment_range = threshold - prev_threshold
-            segment_chars = int((segment_range / total_range) * self.bar_width)
+        for i in range(self.num_segments):
+            segment_start = self.min_value + i * segment_size
+            segment_end = segment_start + segment_size
 
-            if i == len(self.segments) - 1:
-                segment_chars = self.bar_width - current_pos
+            # Calculate how many chars to light in this segment
+            if display_value <= segment_start:
+                lit_chars = 0
+            elif display_value >= segment_end:
+                lit_chars = chars_per_segment
+            else:
+                ratio = (display_value - segment_start) / segment_size
+                lit_chars = int(ratio * chars_per_segment)
 
-            lit_threshold = (display_value - prev_threshold) / segment_range if segment_range > 0 else 0
-            lit_chars = int(lit_threshold * segment_chars) if display_value > prev_threshold else 0
-            lit_chars = min(lit_chars, segment_chars)
+            # Last segment gets remaining chars
+            if i == self.num_segments - 1:
+                chars_this_segment = self.bar_width - (chars_per_segment * i)
+            else:
+                chars_this_segment = chars_per_segment
 
-            if display_value >= threshold:
-                lit_chars = segment_chars
+            # Get colors for this segment
+            segment_colors = [
+                (BAR_SEGMENT_1_LIT, BAR_SEGMENT_1_DARK),
+                (BAR_SEGMENT_2_LIT, BAR_SEGMENT_2_DARK),
+                (BAR_SEGMENT_3_LIT, BAR_SEGMENT_3_DARK),
+            ]
+            lit_color, dark_color = segment_colors[min(i, len(segment_colors) - 1)]
 
-            for j in range(segment_chars):
+            for j in range(chars_this_segment):
                 if j < lit_chars:
-                    text.append("█", style=Style(color=lit_color))
+                    text.append("█", style=lit_color)
                 else:
-                    text.append("░", style=Style(color=dark_color))
-
-            current_pos += segment_chars
+                    text.append("░", style=dark_color)
 
         # Show actual value (not clamped)
-        text.append(f" {self.value:{self.value_format}}", style="bold white")
+        text.append(f" {self.value:{self.value_format}}")
         return text
 
     def watch_value(self, value: float) -> None:
-        self.refresh()
-
-
-class FaultIndicator(Static):
-    """A fault indicator that shows dark red normally, bright red when active."""
-
-    active: reactive[bool] = reactive(False)
-
-    def render(self) -> Text:
-        if self.active:
-            return Text(" FAULT ", style=Style(color="white", bgcolor="#ff0000", bold=True))
-        else:
-            return Text(" FAULT ", style=Style(color="#880000", bgcolor="#400000"))
-
-    def watch_active(self, active: bool) -> None:
         self.refresh()
 
 
@@ -122,15 +136,56 @@ class PowerToggle(Static):
             super().__init__()
 
     def render(self) -> Text:
-        if self.on:
-            return Text(" POWER ", style=Style(color="white", bgcolor="#00aa00", bold=True))
-        else:
-            return Text(" POWER ", style=Style(color="#666666", bgcolor="#003300"))
+        # Style is controlled via CSS classes
+        return Text(" POWER ")
 
     def on_click(self) -> None:
         self.post_message(self.Toggled(not self.on))
 
     def watch_on(self, on: bool) -> None:
+        self.set_class(on, "power-on")
+        self.refresh()
+
+
+class TuneButton(Static):
+    """A tune button that inverts while tuning."""
+
+    tuning: reactive[bool] = reactive(False)
+
+    class Pressed(Message):
+        """Emitted when tune is pressed."""
+        pass
+
+    def render(self) -> Text:
+        return Text(" TUNE ")
+
+    def on_click(self) -> None:
+        if not self.tuning:
+            self.post_message(self.Pressed())
+
+    def watch_tuning(self, tuning: bool) -> None:
+        self.set_class(tuning, "tuning")
+        self.refresh()
+
+
+class FaultButton(Static):
+    """A fault indicator button that can be clicked to clear faults."""
+
+    active: reactive[bool] = reactive(False)
+
+    class Pressed(Message):
+        """Emitted when fault button is pressed."""
+        pass
+
+    def render(self) -> Text:
+        return Text(" FAULT ")
+
+    def on_click(self) -> None:
+        if self.active:
+            self.post_message(self.Pressed())
+
+    def watch_active(self, active: bool) -> None:
+        self.set_class(active, "fault-active")
         self.refresh()
 
 
@@ -145,11 +200,33 @@ class ReadingValue(Static):
 
     def render(self) -> Text:
         text = Text()
-        text.append(f"{self.label}: ", style="bold")
+        text.append(f"{self.label}: ")
         text.append(self.value or "---")
         return text
 
     def watch_value(self, value: str) -> None:
+        self.refresh()
+
+
+class FaultDisplay(Static):
+    """A fault display showing device name and fault status."""
+
+    fault_text: reactive[str] = reactive("None")
+
+    def __init__(self, device_name: str, **kwargs):
+        super().__init__(**kwargs)
+        self.device_name = device_name
+
+    def render(self) -> Text:
+        text = Text()
+        text.append(f"{self.device_name} Fault: ", style="bold white")
+        if self.fault_text == "None":
+            text.append(self.fault_text, style=FAULT_NONE_COLOR)
+        else:
+            text.append(self.fault_text, style=FAULT_ERROR_COLOR)
+        return text
+
+    def watch_fault_text(self, fault_text: str) -> None:
         self.refresh()
 
 
@@ -160,110 +237,141 @@ class ElecraftPowerComboApp(App):
 
     def __init__(
         self,
-        serial_port: Optional[str] = None,
+        kpa_port: Optional[str] = None,
+        kat_port: Optional[str] = None,
         baudrate: int = 38400,
-        poll_interval: float = 0.25,
+        kpa_poll_interval: float = 0.25,
+        kat_poll_interval: float = 30.0,
         **kwargs
     ):
         super().__init__(**kwargs)
-        self._serial_port = serial_port
+        self._kpa_port = kpa_port
+        self._kat_port = kat_port
         self._baudrate = baudrate
-        self._poll_interval = poll_interval
-        self._model: Optional[KPA500Model] = None
-        self._updating_from_model = False  # Prevent feedback loops
+        self._kpa_poll_interval = kpa_poll_interval
+        self._kat_poll_interval = kat_poll_interval
+        self._model: Optional[ComboModel] = None
 
     def compose(self) -> ComposeResult:
-        # KPA500 Amplifier Section
-        with Container(id="amplifier"):
-            yield Static("Elecraft KPA500 Amplifier", id="amp-title")
-            with Horizontal(id="amp-content"):
-                # Left: Readings panel
+        with Container(id="main"):
+            # Title
+            yield Static("Elecraft Power Combo (KPA/KAT500)", id="title")
+
+            # Main content area
+            with Horizontal(id="content"):
+                # Left: Readings panel (yellow when powered on)
                 with Container(id="readings"):
                     yield ReadingValue("Power", id="reading-power")
-                    yield ReadingValue("SWR", id="reading-swr")
                     yield ReadingValue("Temp", id="reading-temp")
                     yield ReadingValue("Current", id="reading-current")
                     yield ReadingValue("HV", id="reading-hv")
                     yield ReadingValue("Band", id="reading-band")
+                    yield ReadingValue("FWD", id="reading-fwd")
+                    yield ReadingValue("RFL", id="reading-rfl")
+                    yield ReadingValue("Bypass SWR", id="reading-bypass-swr")
 
-                # Right: Controls panel
+                # Right: Controls and meters
                 with Container(id="controls"):
-                    with Horizontal(id="control-row"):
-                        yield PowerToggle(id="power-toggle")
+                    # Mode selectors and antenna selector stacked
+                    with Vertical(id="mode-antenna-section"):
+                        yield Static("KPA Mode:", id="kpa-mode-label")
                         with RadioSet(id="mode-select"):
                             yield RadioButton("Standby", id="mode-standby", value=True)
                             yield RadioButton("Operate", id="mode-operate")
-                        yield FaultIndicator(id="fault")
+                        yield Static("KAT Mode:", id="kat-mode-label")
+                        with RadioSet(id="kat-mode-select"):
+                            yield RadioButton("Auto", id="kat-auto", value=True)
+                            yield RadioButton("Manual", id="kat-manual")
+                            yield RadioButton("Bypass", id="kat-bypass")
+                        yield Static("Antenna:", id="antenna-label")
+                        with RadioSet(id="antenna-select"):
+                            yield RadioButton("1", id="ant-1", value=True)
+                            yield RadioButton("2", id="ant-2")
+                            yield RadioButton("3", id="ant-3")
 
                     # Power bar graph (0-700W)
                     yield SegmentedBarGraph(
                         min_value=0,
                         max_value=700,
-                        segments=[
-                            (500, "#004400", "#00ff00"),
-                            (600, "#444400", "#ffff00"),
-                            (700, "#440000", "#ff0000"),
-                        ],
+                        num_segments=3,
                         width=40,
-                        label="Power",
+                        label="Power  ",
                         id="power-bar",
                     )
 
-                    # SWR bar graph (1.0-3.0, clamped display but shows actual value)
+                    # KPA SWR bar graph
                     yield SegmentedBarGraph(
                         min_value=1.0,
                         max_value=3.0,
-                        segments=[
-                            (1.5, "#004400", "#00ff00"),  # Green: 1.0-1.5
-                            (2.0, "#444400", "#ffff00"),  # Yellow: 1.5-2.0
-                            (3.0, "#440000", "#ff0000"),  # Red: 2.0-3.0
-                        ],
+                        num_segments=3,
                         width=40,
-                        label="SWR",
+                        label="KPA SWR",
                         clamp_display=True,
                         value_format=".1f",
-                        id="swr-bar",
+                        id="kpa-swr-bar",
                     )
 
-        # KAT500 Antenna Tuner Section (placeholder for now)
-        with Container(id="tuner"):
-            yield Static("Elecraft KAT500 Antenna Tuner", id="tuner-title")
-            with Vertical(id="tuner-content"):
-                with Horizontal(id="tuner-row1"):
-                    with RadioSet(id="tuner-mode"):
-                        yield RadioButton("Auto", value=True)
-                        yield RadioButton("Manual")
-                        yield RadioButton("Bypass")
-                    yield Button("Tune", id="tune-btn", variant="primary")
-                    yield Static("SWR: 1.0", id="tuner-swr")
+                    # KAT SWR bar graph
+                    yield SegmentedBarGraph(
+                        min_value=1.0,
+                        max_value=3.0,
+                        num_segments=3,
+                        width=40,
+                        label="KAT SWR",
+                        clamp_display=True,
+                        value_format=".1f",
+                        id="kat-swr-bar",
+                    )
 
-                with Horizontal(id="tuner-row2"):
-                    with RadioSet(id="antenna-select"):
-                        yield RadioButton("Antenna 1", value=True)
-                        yield RadioButton("Antenna 2")
-                        yield RadioButton("Antenna 3")
+                    # Buttons row below meters
+                    with Horizontal(id="button-row"):
+                        yield PowerToggle(id="power-toggle")
+                        yield TuneButton(id="tune-btn")
+
+            # Fault section - indicator on left, text on right
+            with Container(id="faults"):
+                with Horizontal(id="faults-row"):
+                    yield FaultButton(id="fault-btn")
+                    with Vertical(id="fault-texts"):
+                        yield FaultDisplay("KPA", id="kpa-fault")
+                        yield FaultDisplay("KAT", id="kat-fault")
 
         yield Static("Ctrl-Q to quit", id="help-footer")
 
     async def on_mount(self) -> None:
-        """Called when app is mounted. Connect to KPA500 if port specified."""
-        if self._serial_port:
-            self._model = KPA500Model(
-                poll_interval=self._poll_interval,
-                on_state_change=self._on_state_change
-            )
-            connected = await self._model.connect(self._serial_port, self._baudrate)
-            if connected:
-                await self._model.start_polling()
-            else:
-                self.notify("Failed to connect to KPA500", severity="error")
+        """Called when app is mounted. Connect to devices if ports specified."""
+        if not self._kpa_port and not self._kat_port:
+            self.exit(message="Error: No serial ports specified. Use --kpa-port and/or --kat-port.")
+            return
+
+        self._model = ComboModel(
+            kpa_poll_interval=self._kpa_poll_interval,
+            kat_poll_interval=self._kat_poll_interval,
+            on_state_change=self._on_state_change
+        )
+        connected = await self._model.connect(
+            kpa_port=self._kpa_port,
+            kat_port=self._kat_port,
+            baudrate=self._baudrate
+        )
+        if connected:
+            await self._model.start_polling()
+        else:
+            # Build error message based on what failed
+            errors = []
+            if self._kpa_port and not self._model.state.kpa_connected:
+                errors.append(f"KPA500 on {self._kpa_port}")
+            if self._kat_port and not self._model.state.kat_connected:
+                errors.append(f"KAT500 on {self._kat_port}")
+            error_msg = f"Error: Failed to connect to {', '.join(errors)}"
+            self.exit(message=error_msg)
 
     async def on_unmount(self) -> None:
-        """Called when app is unmounted. Disconnect from KPA500."""
+        """Called when app is unmounted. Disconnect from devices."""
         if self._model:
             await self._model.disconnect()
 
-    def _on_state_change(self, state: KPA500State) -> None:
+    def _on_state_change(self, state: ComboState) -> None:
         """Called by model when state changes. Posts message to update UI."""
         self.post_message(StateUpdated(state))
 
@@ -271,74 +379,148 @@ class ElecraftPowerComboApp(App):
         """Handle state update message."""
         self._update_ui(event.state)
 
-    def _update_ui(self, state: KPA500State) -> None:
+    def _update_ui(self, state: ComboState) -> None:
         """Update all UI elements from state."""
-        self._updating_from_model = True
-        try:
-            # Power toggle
-            power_toggle = self.query_one("#power-toggle", PowerToggle)
-            power_toggle.on = state.powered_on
+        # Power toggle (reflects combined power state)
+        power_toggle = self.query_one("#power-toggle", PowerToggle)
+        power_toggle.on = state.powered_on
 
-            # Readings panel - yellow when powered on, dark when off
-            readings = self.query_one("#readings")
-            readings.set_class(state.powered_on, "powered-on")
+        # Readings panel - yellow when powered on
+        readings = self.query_one("#readings")
+        readings.set_class(state.powered_on, "powered-on")
 
-            # Readings
-            self.query_one("#reading-power", ReadingValue).value = f"{state.power_watts}W"
-            self.query_one("#reading-swr", ReadingValue).value = f"{state.swr:.1f}"
-            self.query_one("#reading-temp", ReadingValue).value = f"{state.temperature}°C" if state.temperature else "---"
-            self.query_one("#reading-current", ReadingValue).value = f"{state.current:.1f}A" if state.current else "---"
-            self.query_one("#reading-hv", ReadingValue).value = f"{state.voltage:.1f}V" if state.voltage else "---"
-            self.query_one("#reading-band", ReadingValue).value = state.band.name.replace("BAND_", "") if state.band else "---"
+        # KPA500 Readings
+        self.query_one("#reading-power", ReadingValue).value = f"{state.power_watts}W"
+        self.query_one("#reading-temp", ReadingValue).value = f"{state.temperature}°C" if state.temperature else "---"
+        self.query_one("#reading-current", ReadingValue).value = f"{state.current:.1f}A" if state.current else "---"
+        self.query_one("#reading-hv", ReadingValue).value = f"{state.voltage:.1f}V" if state.voltage else "---"
+        self.query_one("#reading-band", ReadingValue).value = state.band.name.replace("BAND_", "") if state.band else "---"
 
-            # Bar graphs
-            self.query_one("#power-bar", SegmentedBarGraph).value = float(state.power_watts)
-            self.query_one("#swr-bar", SegmentedBarGraph).value = state.swr
+        # KAT500 Readings
+        self.query_one("#reading-fwd", ReadingValue).value = f"{state.forward_power}" if state.forward_power is not None else "---"
+        self.query_one("#reading-rfl", ReadingValue).value = f"{state.reflected_power}" if state.reflected_power is not None else "---"
+        self.query_one("#reading-bypass-swr", ReadingValue).value = f"{state.kat_swr_bypass:.2f}" if state.kat_swr_bypass is not None else "---"
 
-            # Operating mode radio buttons
-            if state.operating_mode is not None:
-                if state.operating_mode == OperatingMode.STANDBY:
-                    self.query_one("#mode-standby", RadioButton).value = True
-                else:
-                    self.query_one("#mode-operate", RadioButton).value = True
+        # Bar graphs
+        self.query_one("#power-bar", SegmentedBarGraph).value = float(state.power_watts)
+        self.query_one("#kpa-swr-bar", SegmentedBarGraph).value = state.kpa_swr
+        self.query_one("#kat-swr-bar", SegmentedBarGraph).value = state.kat_swr
 
-            # Fault indicator
-            fault_indicator = self.query_one("#fault", FaultIndicator)
-            fault_indicator.active = state.fault is not None and state.fault != Fault.NONE
-        finally:
-            self._updating_from_model = False
+        # Operating mode radio buttons
+        if state.kpa_operating_mode is not None:
+            if state.kpa_operating_mode == OperatingMode.STANDBY:
+                self.query_one("#mode-standby", RadioButton).value = True
+            else:
+                self.query_one("#mode-operate", RadioButton).value = True
+
+        # KAT mode selection
+        if state.kat_mode is not None:
+            if state.kat_mode == KATMode.AUTO:
+                self.query_one("#kat-auto", RadioButton).value = True
+            elif state.kat_mode == KATMode.MANUAL:
+                self.query_one("#kat-manual", RadioButton).value = True
+            elif state.kat_mode == KATMode.BYPASS:
+                self.query_one("#kat-bypass", RadioButton).value = True
+
+        # Antenna selection
+        if state.antenna is not None:
+            if state.antenna == Antenna.ANT1:
+                self.query_one("#ant-1", RadioButton).value = True
+            elif state.antenna == Antenna.ANT2:
+                self.query_one("#ant-2", RadioButton).value = True
+            elif state.antenna == Antenna.ANT3:
+                self.query_one("#ant-3", RadioButton).value = True
+
+        # Tune button state
+        tune_btn = self.query_one("#tune-btn", TuneButton)
+        tune_btn.tuning = state.is_tuning
+
+        # Fault displays
+        kpa_has_fault = state.kpa_fault is not None and state.kpa_fault != KPAFault.NONE
+        kat_has_fault = state.kat_fault is not None and state.kat_fault != KATFault.NONE
+
+        # Fault button - active if either device has a fault
+        fault_btn = self.query_one("#fault-btn", FaultButton)
+        fault_btn.active = kpa_has_fault or kat_has_fault
+
+        kpa_fault_display = self.query_one("#kpa-fault", FaultDisplay)
+        if kpa_has_fault:
+            kpa_fault_display.fault_text = state.kpa_fault.name
+        else:
+            kpa_fault_display.fault_text = "None"
+
+        kat_fault_display = self.query_one("#kat-fault", FaultDisplay)
+        if kat_has_fault:
+            kat_fault_display.fault_text = state.kat_fault.name
+        else:
+            kat_fault_display.fault_text = "None"
 
     async def on_power_toggle_toggled(self, event: PowerToggle.Toggled) -> None:
         """Handle power toggle click."""
         if self._model:
             await self._model.toggle_power()
 
+    async def on_tune_button_pressed(self, event: TuneButton.Pressed) -> None:
+        """Handle tune button click."""
+        if self._model:
+            await self._model.kat_full_tune()
+
+    async def on_fault_button_pressed(self, event: FaultButton.Pressed) -> None:
+        """Handle fault button click to clear faults."""
+        if self._model:
+            await self._model.kpa_clear_fault()
+            await self._model.kat_clear_fault()
+
     async def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
         """Handle radio button changes."""
-        if not self._model or self._updating_from_model:
+        if not self._model:
             return
 
         radio_set_id = event.radio_set.id
+        state = self._model.state
 
         if radio_set_id == "mode-select":
-            if event.index == 0:
-                await self._model.set_standby()
-            else:
-                await self._model.set_operate()
+            # Only send command if different from current state
+            if event.index == 0 and state.kpa_operating_mode != OperatingMode.STANDBY:
+                await self._model.kpa_set_standby()
+            elif event.index == 1 and state.kpa_operating_mode != OperatingMode.OPERATE:
+                await self._model.kpa_set_operate()
+        elif radio_set_id == "kat-mode-select":
+            mode_map = {0: KATMode.AUTO, 1: KATMode.MANUAL, 2: KATMode.BYPASS}
+            if event.index in mode_map and state.kat_mode != mode_map[event.index]:
+                await self._model.kat_set_mode(mode_map[event.index])
+        elif radio_set_id == "antenna-select":
+            antenna_map = {0: Antenna.ANT1, 1: Antenna.ANT2, 2: Antenna.ANT3}
+            if event.index in antenna_map and state.antenna != antenna_map[event.index]:
+                await self._model.kat_set_antenna(antenna_map[event.index])
 
 
 def main():
     parser = argparse.ArgumentParser(description="Elecraft Power Combo CLI")
-    parser.add_argument("--port", "-p", help="Serial port (e.g., /dev/ttyUSB0)")
+    parser.add_argument("--kpa-port", "-k", help="KPA500 serial port (e.g., /dev/ttyUSB0)")
+    parser.add_argument("--kat-port", "-t", help="KAT500 serial port (e.g., /dev/ttyUSB1)")
     parser.add_argument("--baudrate", "-b", type=int, default=38400, help="Baud rate (default: 38400)")
-    parser.add_argument("--poll-interval", type=float, default=0.25, help="Poll interval in seconds (default: 0.25)")
+    parser.add_argument(
+        "--kpa-poll-interval",
+        type=float,
+        default=0.25,
+        help="KPA500 poll interval in seconds (default: 0.25)"
+    )
+    parser.add_argument(
+        "--kat-poll-interval",
+        type=float,
+        default=30.0,
+        help="KAT500 background poll interval in seconds (default: 30)"
+    )
 
     args = parser.parse_args()
 
     app = ElecraftPowerComboApp(
-        serial_port=args.port,
+        kpa_port=args.kpa_port,
+        kat_port=args.kat_port,
         baudrate=args.baudrate,
-        poll_interval=args.poll_interval
+        kpa_poll_interval=args.kpa_poll_interval,
+        kat_poll_interval=args.kat_poll_interval,
     )
     app.run()
 
