@@ -221,21 +221,38 @@ RadioSet {
 
 RadioButton {
     background: #333333;
-    color: #004400;
     height: auto;
     padding: 0 1;
+    border: none;
 }
 
-RadioButton:focus {
-    text-style: bold;
+RadioButton > .toggle--button {
+    color: #004400;
+    background: #333333;
 }
 
-RadioButton.-on {
+RadioButton.-on > .toggle--button {
     color: #00ff00;
+    background: #333333;
 }
 
 RadioButton > .toggle--label {
     color: white;
+    background: #333333;
+}
+
+RadioButton:focus {
+    background: #333333;
+}
+
+RadioButton:focus > .toggle--label {
+    color: white;
+    background: #333333;
+    text-style: bold;
+}
+
+RadioButton:focus > .toggle--button {
+    background: #333333;
 }
 
 /* Help footer */

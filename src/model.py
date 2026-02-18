@@ -14,9 +14,12 @@ KAT500 Sleep Strategy:
 """
 
 import asyncio
+import logging
 import time
 from dataclasses import dataclass
 from typing import Optional, Callable
+
+logger = logging.getLogger(__name__)
 
 from kpa500 import (
     KPA500,
@@ -135,31 +138,36 @@ class ComboModel:
         # Connect to KPA500
         if kpa_port:
             try:
+                logger.info("Connecting to KPA500 on %s", kpa_port)
                 self._kpa = await KPA500.from_serial_port(kpa_port, baudrate=baudrate)
                 self._state.kpa_connected = True
                 kpa_powered = self._kpa.is_powered_on or False
+                logger.info("KPA500 connected, powered_on=%s", kpa_powered)
             except Exception as e:
-                print(f"KPA500 connection failed: {e}")
+                logger.error("KPA500 connection failed: %s", e)
                 self._state.kpa_connected = False
 
         # Connect to KAT500
         if kat_port:
             try:
+                logger.info("Connecting to KAT500 on %s", kat_port)
                 self._kat = await KAT500.from_serial_port(kat_port, baudrate=baudrate)
                 self._state.kat_connected = True
 
                 # Enable sleep mode on KAT500
+                await self._kat.wake()
                 await self._kat.set_sleep_enabled(True)
                 sleep_enabled = await self._kat.get_sleep_enabled()
                 if not sleep_enabled:
-                    print("Warning: Failed to enable KAT500 sleep mode")
+                    logger.warning("Failed to enable KAT500 sleep mode")
 
                 # Check power state
                 power_state = await self._kat.get_power_state()
                 kat_powered = power_state == PowerState.ON if power_state else False
+                logger.info("KAT500 connected, powered_on=%s", kat_powered)
 
             except Exception as e:
-                print(f"KAT500 connection failed: {e}")
+                logger.error("KAT500 connection failed: %s", e)
                 self._state.kat_connected = False
 
         # Synchronize power state: if one is on, turn both on
@@ -289,7 +297,7 @@ class ComboModel:
             self._state.kpa_fault = await self._kpa.get_fault()
 
         except Exception as e:
-            print(f"KPA500 poll error: {e}")
+            logger.debug("KPA500 poll error: %s", e)
 
     async def _poll_kat(self) -> None:
         """Poll the KAT500 and update state."""
@@ -310,7 +318,7 @@ class ComboModel:
             self._state.is_tuning = await self._kat.is_tuning()
 
         except Exception as e:
-            print(f"KAT500 poll error: {e}")
+            logger.debug("KAT500 poll error: %s", e)
 
     # =========================================================================
     # Combined Power Control
@@ -318,19 +326,25 @@ class ComboModel:
 
     async def power_on(self) -> bool:
         """Turn both devices on."""
+        logger.info("Powering on devices")
         success = True
 
         if self._kpa and self._state.kpa_connected:
+            logger.info("Powering on KPA500")
             if not await self._kpa.power_on():
+                logger.error("Failed to power on KPA500")
                 success = False
 
         if self._kat and self._state.kat_connected:
+            logger.info("Powering on KAT500")
             # Wake from sleep first
             await self._kat.wake()
             if not await self._kat.power_on():
+                logger.error("Failed to power on KAT500")
                 success = False
 
         if success:
+            logger.info("Devices powered on successfully")
             self._state.powered_on = True
             # Do initial KAT poll after power on
             if self._state.kat_connected:
@@ -342,19 +356,25 @@ class ComboModel:
 
     async def power_off(self) -> bool:
         """Turn both devices off."""
+        logger.info("Powering off devices")
         success = True
 
         if self._kpa and self._state.kpa_connected:
+            logger.info("Powering off KPA500")
             # Put KPA in standby first
             await self._kpa.set_standby()
             if not await self._kpa.power_off():
+                logger.error("Failed to power off KPA500")
                 success = False
 
         if self._kat and self._state.kat_connected:
+            logger.info("Powering off KAT500")
             if not await self._kat.power_off():
+                logger.error("Failed to power off KAT500")
                 success = False
 
         if success:
+            logger.info("Devices powered off successfully")
             self._state.powered_on = False
             self._notify_change()
 
@@ -375,30 +395,39 @@ class ComboModel:
         """Set KPA500 to standby mode."""
         if not self._kpa or not self._state.powered_on:
             return False
+        logger.info("Setting KPA500 to standby")
         result = await self._kpa.set_standby()
         if result:
             self._state.kpa_operating_mode = OperatingMode.STANDBY
             self._notify_change()
+        else:
+            logger.error("Failed to set KPA500 to standby")
         return result
 
     async def kpa_set_operate(self) -> bool:
         """Set KPA500 to operate mode."""
         if not self._kpa or not self._state.powered_on:
             return False
+        logger.info("Setting KPA500 to operate")
         result = await self._kpa.set_operate()
         if result:
             self._state.kpa_operating_mode = OperatingMode.OPERATE
             self._notify_change()
+        else:
+            logger.error("Failed to set KPA500 to operate")
         return result
 
     async def kpa_clear_fault(self) -> bool:
         """Clear KPA500 fault."""
         if not self._kpa or not self._state.powered_on:
             return False
+        logger.info("Clearing KPA500 fault")
         result = await self._kpa.clear_fault()
         if result:
             self._state.kpa_fault = KPAFault.NONE
             self._notify_change()
+        else:
+            logger.error("Failed to clear KPA500 fault")
         return result
 
     # =========================================================================
@@ -409,24 +438,30 @@ class ComboModel:
         """Set KAT500 operating mode (Auto/Manual/Bypass)."""
         if not self._kat or not self._state.powered_on:
             return False
+        logger.info("Setting KAT500 mode to %s", mode.name)
         # Wake from sleep first if needed
         await self._kat.wake()
         result = await self._kat.set_mode(mode)
         if result:
             self._state.kat_mode = mode
             self._notify_change()
+        else:
+            logger.error("Failed to set KAT500 mode to %s", mode.name)
         return result
 
     async def kat_set_antenna(self, antenna: Antenna) -> bool:
         """Set KAT500 antenna."""
         if not self._kat or not self._state.powered_on:
             return False
+        logger.info("Setting KAT500 antenna to %s", antenna.name)
         # Wake from sleep first if needed
         await self._kat.wake()
         result = await self._kat.set_antenna(antenna)
         if result:
             self._state.antenna = antenna
             self._notify_change()
+        else:
+            logger.error("Failed to set KAT500 antenna to %s", antenna.name)
         return result
 
     async def kat_full_tune(self) -> bool:
@@ -436,29 +471,38 @@ class ComboModel:
         This puts the KPA500 in standby first, then initiates a full tune
         on the KAT500. The is_tuning state will be updated by polling.
         """
+        logger.info("Starting full tune sequence")
         if not self._state.powered_on:
+            logger.warning("Full tune aborted: devices not powered on")
             return False
 
         # Put KPA in standby first if connected
         if self._kpa and self._state.kpa_connected:
+            logger.info("Setting KPA500 to standby before tune")
             standby_result = await self._kpa.set_standby()
             if not standby_result:
+                logger.error("Failed to set KPA500 to standby")
                 return False
             self._state.kpa_operating_mode = OperatingMode.STANDBY
+            logger.debug("KPA500 standby complete")
 
         # Start KAT tune if connected
         if self._kat and self._state.kat_connected:
+            logger.debug("Waking KAT500")
             # Wake from sleep first if needed
             await self._kat.wake()
             # Retry full_tune up to 3 times
             for attempt in range(3):
+                logger.info("Initiating KAT500 full tune (attempt %d)", attempt + 1)
                 result = await self._kat.full_tune()
                 if result:
+                    logger.info("Full tune started successfully")
                     self._state.is_tuning = True
                     self._notify_change()
                     return True
                 if attempt < 2:
                     await asyncio.sleep(0.1)  # Brief delay before retry
+            logger.error("Full tune failed after 3 attempts")
             return False
 
         return False
@@ -467,10 +511,13 @@ class ComboModel:
         """Clear KAT500 fault."""
         if not self._kat or not self._state.powered_on:
             return False
+        logger.info("Clearing KAT500 fault")
         # Wake from sleep first if needed
         await self._kat.wake()
         result = await self._kat.clear_fault()
         if result:
             self._state.kat_fault = KATFault.NONE
             self._notify_change()
+        else:
+            logger.error("Failed to clear KAT500 fault")
         return result

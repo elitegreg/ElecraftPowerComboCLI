@@ -87,6 +87,10 @@ class MockStreamWriter:
     def get_all_written(self) -> list[bytes]:
         return self._written.copy()
 
+    def get_all_commands(self) -> str:
+        """Get all written data as a single string."""
+        return b"".join(self._written).decode('ascii')
+
 
 # =============================================================================
 # Fixtures
@@ -186,14 +190,14 @@ class TestKPA500:
         mock_reader.add_response("^ON1;")
         result = await kpa500_powered_on.power_on()
         assert result
-        assert "^ON1;" in mock_writer.get_last_command()
+        assert "^ON1;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_set_power_off(self, mock_reader, mock_writer, kpa500_powered_on):
         mock_reader.add_response("^ON0;")
         result = await kpa500_powered_on.power_off()
         assert result
-        assert "^ON0;" in mock_writer.get_last_command()
+        assert "^ON0;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_operating_mode_standby(self, mock_reader, kpa500):
@@ -212,14 +216,14 @@ class TestKPA500:
         mock_reader.add_response("^OS0;")
         result = await kpa500.set_standby()
         assert result
-        assert "^OS0;" in mock_writer.get_last_command()
+        assert "^OS0;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_set_operate(self, mock_reader, mock_writer, kpa500):
         mock_reader.add_response("^OS1;")
         result = await kpa500.set_operate()
         assert result
-        assert "^OS1;" in mock_writer.get_last_command()
+        assert "^OS1;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_band(self, mock_reader, kpa500):
@@ -232,7 +236,7 @@ class TestKPA500:
         mock_reader.add_response("^BN03;")
         result = await kpa500.set_band(Band.BAND_40M)
         assert result
-        assert "^BN03;" in mock_writer.get_last_command()
+        assert "^BN03;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_alc(self, mock_reader, kpa500):
@@ -245,7 +249,7 @@ class TestKPA500:
         mock_reader.add_response("^AL100;")
         result = await kpa500.set_alc(100)
         assert result
-        assert "^AL100;" in mock_writer.get_last_command()
+        assert "^AL100;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_set_alc_invalid(self, kpa500):
@@ -263,7 +267,7 @@ class TestKPA500:
         mock_reader.add_response("^FC2;")
         result = await kpa500.set_fan_speed(FanSpeed.HIGH)
         assert result
-        assert "^FC2;" in mock_writer.get_last_command()
+        assert "^FC2;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_speaker(self, mock_reader, kpa500):
@@ -276,14 +280,14 @@ class TestKPA500:
         mock_reader.add_response("^SP1;")
         result = await kpa500.set_speaker(True)
         assert result
-        assert "^SP1;" in mock_writer.get_last_command()
+        assert "^SP1;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_set_speaker_off(self, mock_reader, mock_writer, kpa500):
         mock_reader.add_response("^SP0;")
         result = await kpa500.set_speaker(False)
         assert result
-        assert "^SP0;" in mock_writer.get_last_command()
+        assert "^SP0;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_tr_delay(self, mock_reader, kpa500):
@@ -296,7 +300,7 @@ class TestKPA500:
         mock_reader.add_response("^TR30;")
         result = await kpa500.set_tr_delay(30)
         assert result
-        assert "^TR30;" in mock_writer.get_last_command()
+        assert "^TR30;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_set_tr_delay_invalid(self, kpa500):
@@ -365,7 +369,7 @@ class TestKPA500:
         mock_reader.add_response("^BRP2;")
         result = await kpa500.set_pc_baudrate(BaudRate.BAUD_19200)
         assert result
-        assert "^BRP2;" in mock_writer.get_last_command()
+        assert "^BRP2;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_radio_interface(self, mock_reader, kpa500):
@@ -378,7 +382,7 @@ class TestKPA500:
         mock_reader.add_response("^XI1;")
         result = await kpa500.set_radio_interface(RadioInterface.AUX)
         assert result
-        assert "^XI1;" in mock_writer.get_last_command()
+        assert "^XI1;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_get_standby_on_band_change(self, mock_reader, kpa500):
@@ -391,7 +395,7 @@ class TestKPA500:
         mock_reader.add_response("^BC0;")
         result = await kpa500.set_standby_on_band_change(False)
         assert result
-        assert "^BC0;" in mock_writer.get_last_command()
+        assert "^BC0;" in mock_writer.get_all_commands()
 
     @pytest.mark.asyncio
     async def test_ping_success(self, mock_reader, kpa500):

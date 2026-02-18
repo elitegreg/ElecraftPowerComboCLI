@@ -6,6 +6,7 @@ Control interface for KPA500 amplifier and KAT500 antenna tuner.
 """
 
 import argparse
+import logging
 from typing import Optional
 
 from textual.app import App, ComposeResult
@@ -52,23 +53,49 @@ class SegmentedBarGraph(Static):
 
     def __init__(
         self,
-        min_value: float,
-        max_value: float,
-        num_segments: int = 3,
+        thresholds: list[float],
         width: int = 30,
         label: str = "",
         clamp_display: bool = False,
         value_format: str = ".0f",
         **kwargs
     ):
+        """
+        Create a segmented bar graph.
+
+        Args:
+            thresholds: List of boundary values defining segments.
+                        e.g., [100, 500, 600, 700] creates 3 segments:
+                        [100-500), [500-600), [600-700]
+            width: Total character width of the bar
+            label: Optional label prefix
+            clamp_display: If True, clamp display value to max threshold
+            value_format: Format string for value display
+        """
         super().__init__(**kwargs)
-        self.min_value = min_value
-        self.max_value = max_value
-        self.num_segments = num_segments
+        self.thresholds = thresholds
+        self.min_value = thresholds[0]
+        self.max_value = thresholds[-1]
+        self.num_segments = len(thresholds) - 1
         self.bar_width = width
         self.label = label
         self.clamp_display = clamp_display
         self.value_format = value_format
+
+        # Calculate character widths proportional to segment ranges
+        total_range = self.max_value - self.min_value
+        self.segment_chars = []
+        chars_allocated = 0
+        for i in range(self.num_segments):
+            segment_range = thresholds[i + 1] - thresholds[i]
+            proportion = segment_range / total_range
+            if i == self.num_segments - 1:
+                # Last segment gets remaining chars to avoid rounding errors
+                chars = self.bar_width - chars_allocated
+            else:
+                chars = int(proportion * self.bar_width)
+            self.segment_chars.append(chars)
+            chars_allocated += chars
 
     def render(self) -> Text:
         text = Text()
@@ -78,29 +105,20 @@ class SegmentedBarGraph(Static):
         # Clamp value for bar display but keep actual for text
         display_value = min(self.value, self.max_value) if self.clamp_display else self.value
 
-        # Calculate segment boundaries (evenly divided)
-        total_range = self.max_value - self.min_value
-        segment_size = total_range / self.num_segments
-        chars_per_segment = self.bar_width // self.num_segments
-
         for i in range(self.num_segments):
-            segment_start = self.min_value + i * segment_size
-            segment_end = segment_start + segment_size
+            segment_start = self.thresholds[i]
+            segment_end = self.thresholds[i + 1]
+            segment_range = segment_end - segment_start
+            chars_this_segment = self.segment_chars[i]
 
             # Calculate how many chars to light in this segment
             if display_value <= segment_start:
                 lit_chars = 0
             elif display_value >= segment_end:
-                lit_chars = chars_per_segment
+                lit_chars = chars_this_segment
             else:
-                ratio = (display_value - segment_start) / segment_size
-                lit_chars = int(ratio * chars_per_segment)
-
-            # Last segment gets remaining chars
-            if i == self.num_segments - 1:
-                chars_this_segment = self.bar_width - (chars_per_segment * i)
-            else:
-                chars_this_segment = chars_per_segment
+                ratio = (display_value - segment_start) / segment_range
+                lit_chars = int(ratio * chars_this_segment)
 
             # Get colors for this segment
             segment_colors = [
@@ -289,21 +307,17 @@ class ElecraftPowerComboApp(App):
                             yield RadioButton("2", id="ant-2")
                             yield RadioButton("3", id="ant-3")
 
-                    # Power bar graph (0-700W)
+                    # Power bar graph: [100-500) green, [500-600) yellow, [600-700] red
                     yield SegmentedBarGraph(
-                        min_value=0,
-                        max_value=700,
-                        num_segments=3,
+                        thresholds=[100, 500, 600, 700],
                         width=40,
                         label="Power  ",
                         id="power-bar",
                     )
 
-                    # KPA SWR bar graph
+                    # KPA SWR bar graph: [1.0-1.5) green, [1.5-2.0) yellow, [2.0-3.0] red
                     yield SegmentedBarGraph(
-                        min_value=1.0,
-                        max_value=3.0,
-                        num_segments=3,
+                        thresholds=[1.0, 1.5, 2.0, 3.0],
                         width=40,
                         label="KPA SWR",
                         clamp_display=True,
@@ -311,11 +325,9 @@ class ElecraftPowerComboApp(App):
                         id="kpa-swr-bar",
                     )
 
-                    # KAT SWR bar graph
+                    # KAT SWR bar graph: [1.0-1.5) green, [1.5-2.0) yellow, [2.0-3.0] red
                     yield SegmentedBarGraph(
-                        min_value=1.0,
-                        max_value=3.0,
-                        num_segments=3,
+                        thresholds=[1.0, 1.5, 2.0, 3.0],
                         width=40,
                         label="KAT SWR",
                         clamp_display=True,
@@ -406,30 +418,22 @@ class ElecraftPowerComboApp(App):
         self.query_one("#kpa-swr-bar", SegmentedBarGraph).value = state.kpa_swr
         self.query_one("#kat-swr-bar", SegmentedBarGraph).value = state.kat_swr
 
-        # Operating mode radio buttons
+        # Operating mode radio buttons (use RadioSet._selected for proper mutual exclusivity)
         if state.kpa_operating_mode is not None:
-            if state.kpa_operating_mode == OperatingMode.STANDBY:
-                self.query_one("#mode-standby", RadioButton).value = True
-            else:
-                self.query_one("#mode-operate", RadioButton).value = True
+            mode_index = 0 if state.kpa_operating_mode == OperatingMode.STANDBY else 1
+            self.query_one("#mode-select", RadioSet)._selected = mode_index
 
         # KAT mode selection
         if state.kat_mode is not None:
-            if state.kat_mode == KATMode.AUTO:
-                self.query_one("#kat-auto", RadioButton).value = True
-            elif state.kat_mode == KATMode.MANUAL:
-                self.query_one("#kat-manual", RadioButton).value = True
-            elif state.kat_mode == KATMode.BYPASS:
-                self.query_one("#kat-bypass", RadioButton).value = True
+            kat_mode_map = {KATMode.AUTO: 0, KATMode.MANUAL: 1, KATMode.BYPASS: 2}
+            if state.kat_mode in kat_mode_map:
+                self.query_one("#kat-mode-select", RadioSet)._selected = kat_mode_map[state.kat_mode]
 
         # Antenna selection
         if state.antenna is not None:
-            if state.antenna == Antenna.ANT1:
-                self.query_one("#ant-1", RadioButton).value = True
-            elif state.antenna == Antenna.ANT2:
-                self.query_one("#ant-2", RadioButton).value = True
-            elif state.antenna == Antenna.ANT3:
-                self.query_one("#ant-3", RadioButton).value = True
+            antenna_map = {Antenna.ANT1: 0, Antenna.ANT2: 1, Antenna.ANT3: 2}
+            if state.antenna in antenna_map:
+                self.query_one("#antenna-select", RadioSet)._selected = antenna_map[state.antenna]
 
         # Tune button state
         tune_btn = self.query_one("#tune-btn", TuneButton)
@@ -512,8 +516,30 @@ def main():
         default=30.0,
         help="KAT500 background poll interval in seconds (default: 30)"
     )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="Log file path (logging disabled if not specified)"
+    )
+    parser.add_argument(
+        "--log-level",
+        type=str,
+        default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Log level (default: INFO)"
+    )
 
     args = parser.parse_args()
+
+    # Configure logging if log file specified
+    if args.log_file:
+        logging.basicConfig(
+            filename=args.log_file,
+            level=getattr(logging, args.log_level),
+            format="%(asctime)s %(name)s %(levelname)s: %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
 
     app = ElecraftPowerComboApp(
         kpa_port=args.kpa_port,

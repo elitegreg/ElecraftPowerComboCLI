@@ -7,10 +7,13 @@ Based on KAT500 Serial Command Reference documentation.
 """
 
 import asyncio
+import logging
 from enum import IntEnum, Enum
 from dataclasses import dataclass
 from typing import Optional, Self
 import serial_asyncio_fast
+
+logger = logging.getLogger(__name__)
 
 
 class Band(IntEnum):
@@ -99,13 +102,17 @@ class KAT500:
 
     DEFAULT_BAUDRATE = 38400
     DEFAULT_TIMEOUT = 0.1
+    DEFAULT_RETRY_COUNT = 3
+    DEFAULT_RETRY_INTERVAL = 0.1
     COMMAND_TERMINATOR = ";"
 
     def __init__(
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        timeout: float = DEFAULT_TIMEOUT
+        timeout: float = DEFAULT_TIMEOUT,
+        retry_count: int = DEFAULT_RETRY_COUNT,
+        retry_interval: float = DEFAULT_RETRY_INTERVAL
     ):
         """
         Initialize KAT500 interface with async streams.
@@ -114,10 +121,14 @@ class KAT500:
             reader: Async stream reader for receiving data
             writer: Async stream writer for sending data
             timeout: Command timeout in seconds
+            retry_count: Number of retries for set commands
+            retry_interval: Interval between retries in seconds
         """
         self._reader = reader
         self._writer = writer
         self._timeout = timeout
+        self._retry_count = retry_count
+        self._retry_interval = retry_interval
         self._lock = asyncio.Lock()
 
     @classmethod
@@ -125,7 +136,9 @@ class KAT500:
         cls,
         port: str,
         baudrate: int = DEFAULT_BAUDRATE,
-        timeout: float = DEFAULT_TIMEOUT
+        timeout: float = DEFAULT_TIMEOUT,
+        retry_count: int = DEFAULT_RETRY_COUNT,
+        retry_interval: float = DEFAULT_RETRY_INTERVAL
     ) -> Self:
         """
         Create KAT500 interface from a serial port.
@@ -134,6 +147,8 @@ class KAT500:
             port: Serial port path (e.g., '/dev/ttyUSB0' or 'COM3')
             baudrate: Baud rate (default 38400)
             timeout: Command timeout in seconds
+            retry_count: Number of retries for set commands
+            retry_interval: Interval between retries in seconds
 
         Returns:
             Configured KAT500 instance
@@ -146,7 +161,7 @@ class KAT500:
             stopbits=1
         )
 
-        return cls(reader, writer, timeout)
+        return cls(reader, writer, timeout, retry_count, retry_interval)
 
     async def _send_command(
         self,
@@ -180,6 +195,7 @@ class KAT500:
                 pass
 
             # Send command
+            logger.debug("KAT500 TX: %s", full_command)
             self._writer.write(full_command.encode('ascii'))
             await self._writer.drain()
 
@@ -190,10 +206,12 @@ class KAT500:
                     timeout=timeout
                 )
                 response_str = response.decode('ascii').strip()
+                logger.debug("KAT500 RX: %s", response_str)
                 if response_str.endswith(self.COMMAND_TERMINATOR):
                     response_str = response_str[:-1]
                 return response_str
             except asyncio.TimeoutError:
+                logger.debug("KAT500 RX: <timeout>")
                 return None
 
     async def _get_command(self, command: str) -> Optional[str]:
@@ -204,10 +222,19 @@ class KAT500:
         return response
 
     async def _set_command(self, command: str, data: str) -> bool:
-        """Send a SET command and verify it was accepted."""
-        response = await self._send_command(command, data)
+        """
+        Send a SET command and verify it was accepted.
+
+        Retries up to retry_count times with retry_interval delay between attempts.
+        """
         expected = f"{command}{data}"
-        return response == expected
+        for attempt in range(self._retry_count):
+            response = await self._send_command(command, data)
+            if response == expected:
+                return True
+            if attempt < self._retry_count - 1:
+                await asyncio.sleep(self._retry_interval)
+        return False
 
     # =========================================================================
     # Power Control

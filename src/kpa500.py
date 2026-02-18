@@ -7,10 +7,13 @@ Based on KPA500 Programmer's Reference documentation.
 """
 
 import asyncio
+import logging
 from enum import IntEnum, Enum
 from dataclasses import dataclass
 from typing import Optional, Protocol, Self
 import serial_asyncio_fast
+
+logger = logging.getLogger(__name__)
 
 
 class Band(IntEnum):
@@ -109,6 +112,8 @@ class KPA500:
 
     DEFAULT_BAUDRATE = 38400
     DEFAULT_TIMEOUT = 1.0
+    DEFAULT_RETRY_COUNT = 3
+    DEFAULT_RETRY_INTERVAL = 0.1
     COMMAND_PREFIX = "^"
     COMMAND_TERMINATOR = ";"
 
@@ -116,7 +121,9 @@ class KPA500:
         self,
         reader: asyncio.StreamReader,
         writer: asyncio.StreamWriter,
-        timeout: float = DEFAULT_TIMEOUT
+        timeout: float = DEFAULT_TIMEOUT,
+        retry_count: int = DEFAULT_RETRY_COUNT,
+        retry_interval: float = DEFAULT_RETRY_INTERVAL
     ):
         """
         Initialize KPA500 interface with async streams.
@@ -125,10 +132,14 @@ class KPA500:
             reader: Async stream reader for receiving data
             writer: Async stream writer for sending data
             timeout: Command timeout in seconds
+            retry_count: Number of retries for set commands
+            retry_interval: Interval between retries in seconds
         """
         self._reader = reader
         self._writer = writer
         self._timeout = timeout
+        self._retry_count = retry_count
+        self._retry_interval = retry_interval
         self._lock = asyncio.Lock()
         self._power_on: Optional[bool] = None
 
@@ -137,7 +148,9 @@ class KPA500:
         cls,
         port: str,
         baudrate: int = DEFAULT_BAUDRATE,
-        timeout: float = DEFAULT_TIMEOUT
+        timeout: float = DEFAULT_TIMEOUT,
+        retry_count: int = DEFAULT_RETRY_COUNT,
+        retry_interval: float = DEFAULT_RETRY_INTERVAL
     ) -> Self:
         """
         Create KPA500 interface from a serial port.
@@ -146,6 +159,8 @@ class KPA500:
             port: Serial port path (e.g., '/dev/ttyUSB0' or 'COM3')
             baudrate: Baud rate (default 38400)
             timeout: Command timeout in seconds
+            retry_count: Number of retries for set commands
+            retry_interval: Interval between retries in seconds
 
         Returns:
             Configured KPA500 instance
@@ -158,7 +173,7 @@ class KPA500:
             stopbits=1
         )
 
-        instance = cls(reader, writer, timeout)
+        instance = cls(reader, writer, timeout, retry_count, retry_interval)
         await instance._detect_power_state()
         return instance
 
@@ -188,7 +203,8 @@ class KPA500:
         self,
         command: str,
         data: str = "",
-        timeout: Optional[float] = None
+        timeout: Optional[float] = None,
+        wait_response: bool = True
     ) -> Optional[str]:
         """
         Send a command to the KPA500 and optionally wait for response.
@@ -197,6 +213,7 @@ class KPA500:
             command: Command without prefix (e.g., "ON", "BN")
             data: Optional data to append to command
             timeout: Override default timeout
+            wait_response: If False, return immediately after sending (for set commands)
 
         Returns:
             Response string without prefix/terminator, or None if no response
@@ -216,8 +233,12 @@ class KPA500:
                 pass
 
             # Send command
+            logger.debug("KPA500 TX: %s", full_command)
             self._writer.write(full_command.encode('ascii'))
             await self._writer.drain()
+
+            if not wait_response:
+                return None
 
             # Wait for response
             try:
@@ -226,6 +247,7 @@ class KPA500:
                     timeout=timeout
                 )
                 response_str = response.decode('ascii').strip()
+                logger.debug("KPA500 RX: %s", response_str)
                 # Remove prefix and terminator
                 if response_str.startswith(self.COMMAND_PREFIX):
                     response_str = response_str[1:]
@@ -233,6 +255,7 @@ class KPA500:
                     response_str = response_str[:-1]
                 return response_str
             except asyncio.TimeoutError:
+                logger.debug("KPA500 RX: <timeout>")
                 return None
 
     async def _get_command(self, command: str) -> Optional[str]:
@@ -243,10 +266,25 @@ class KPA500:
         return response
 
     async def _set_command(self, command: str, data: str) -> bool:
-        """Send a SET command and verify it was accepted."""
-        response = await self._send_command(command, data)
-        expected = f"{command}{data}"
-        return response == expected
+        """
+        Send a SET command and verify it was accepted.
+
+        KPA500 set commands do not return a response, so we send the set command
+        then follow up with a get command to verify the value was set.
+
+        Retries up to retry_count times with retry_interval delay between attempts.
+        """
+        for attempt in range(self._retry_count):
+            # Send the set command (no response expected)
+            await self._send_command(command, data, wait_response=False)
+            # Verify by reading back with a get command
+            response = await self._get_command(command)
+            if response == data:
+                return True
+            if attempt < self._retry_count - 1:
+                await asyncio.sleep(self._retry_interval)
+
+        return False
 
     # Power Control
 
